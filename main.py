@@ -47,15 +47,12 @@ def random_vm(): # vm [name, disksize]
     vm.append(''.join(random.choice(string.ascii_lowercase) for _ in range(5)))
     vm.append(random.randint( 0, 5000000000) )
     return vm
-    
+
 def random_snapshot(vm,size): # snapshot [vm name, name, size, timestamp]
     ss=[]
     ss.append(vm)
     ss.append(''.join(random.choice(string.ascii_lowercase) for _ in range(3)))
-    while True:
-        ssize = random.randint( 0, 5000000000)
-        if ssize <= int(size): break
-    ss.append(ssize)
+    ss.append(random.randint( 0, int(size)))
     ss.append('152' + ''.join(random.choice(string.digits) for _ in range(7)))
     return ss
 
@@ -152,8 +149,8 @@ def main():
 
             if debug: print db_address, db_port
 
-            db=MySQLdb.connect(host=db_address,port=db_port,user=db_user,passwd=db_password,db=db_base)
-            dbc=db.cursor() #, created, added)
+            db = MySQLdb.connect(host=db_address,port=db_port,user=db_user,passwd=db_password,db=db_base)
+            dbc = db.cursor()
             insert_data = []
             time_to_db = datetime.utcfromtimestamp(int(time.time())).strftime('%Y-%m-%d %H:%M:%S')
 
