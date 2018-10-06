@@ -93,13 +93,13 @@ def mysql_out(config,passed_vms,vms,snapshots):
                         insert_data
                        )
         db.commit()
-
+        result = 'Inserted ' + str(records) +  ' record(s) into the database ' + db_base.upper()
     except MySQLdb.Error as error:
-        return error
+        result = error
     finally:
         if db != None: db.close()
 
-    return 'Inserted ' + str(records) +  ' record(s) into the database ' + db_base.upper()
+    return result
 
 def main():
     global debug
