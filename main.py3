@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/python3
 
 import atexit
 #import argparse
@@ -7,7 +7,7 @@ import random
 import string
 import time
 import ssl
-import ConfigParser
+import configparser
 import MySQLdb
 
 from pyVmomi import vim, vmodl
@@ -21,7 +21,7 @@ def to_bool(value):
               'false': False, '0': False, 'no': False }
     if isinstance(value, bool):
         return value
-    if not isinstance(value, basestring):
+    if not isinstance(value, str):
         raise ValueError('invalid literal for boolean. Not a string.')
     lower_value = value.lower()
     if lower_value in valid:
@@ -38,7 +38,7 @@ def GetHumanReadable(size,precision=2):
     return "%.*f%s"%(precision, size, suffixes[suffixIndex])
 
 def read_config(section):
-    config = ConfigParser.RawConfigParser()
+    config = configparser.RawConfigParser()
     config.read('cred.conf')
     return config.items(section)
 
@@ -56,7 +56,53 @@ def random_snapshot(vm,size): # snapshot [vm name, name, size, timestamp]
     ss.append('152' + ''.join(random.choice(string.digits) for _ in range(7)))
     return ss
 
+def mysql_out(config,passed_vms,vms,snapshots):
+    records = 0
+    for item in config:
+        if item[0].lower() == 'db_address':  db_address =  item[1]
+        if item[0].lower() == 'db_port':     db_port =     int(item[1])
+        if item[0].lower() == 'db_user':     db_user =     item[1]
+        if item[0].lower() == 'db_password': db_password = item[1]
+        if item[0].lower() == 'db_base':     db_base =     item[1]
+
+    if debug: print(db_address, db_port)
+
+    try:
+        db = None
+        db = MySQLdb.connect(host=db_address,port=db_port,user=db_user,passwd=db_password,db=db_base)
+        dbc = db.cursor()
+        insert_data = []
+        time_to_db = datetime.utcfromtimestamp(int(time.time())).strftime('%Y-%m-%d %H:%M:%S')
+
+        for vm in passed_vms:
+            for snapshot in snapshots:
+                if vm[0] == snapshot[0]:
+                    records += 1
+                    line = (snapshot[1],
+                            snapshot[0],
+                            snapshot[2],
+                            datetime.utcfromtimestamp(int(snapshot[3])).strftime('%Y-%m-%d %H:%M:%S'),
+                            time_to_db
+                           )
+                    insert_data.append(line)
+
+        if debug: print(insert_data)
+
+        dbc.executemany("""INSERT INTO snapshots (sname, vmname, size, created, added)
+                           VALUES (%s, %s, %s, %s, %s)""",
+                        insert_data
+                       )
+        db.commit()
+
+    except MySQLdb.Error as error:
+        return error
+    finally:
+        if db != None: db.close()
+
+    return 'Inserted ' + str(records) +  ' record(s) into the database ' + db_base.upper()
+
 def main():
+    global debug
     GC = read_config('general')
     VC = read_config('vCenter')
     do_mysql = False
@@ -79,7 +125,7 @@ def main():
         if item[0].lower() == 'vc_password': vC_password = item[1]
         if item[0].lower() == 'vc_ssl':      vC_ssl =      to_bool(item[1])
 
-    if debug: print vC_address, vC_port, vC_ssl, ratio, snapshots, runtime
+    if debug: print(vC_address, vC_port, vC_ssl, ratio, snapshots, runtime)
     if not random_data:
         try:
             if not vC_ssl:
@@ -118,8 +164,8 @@ def main():
                 sss.append(random_snapshot(item[0],item[1]))
 
     if debug:
-        print vms
-        print sss
+        print(vms)
+        print(sss)
 
     passed_vms=[]
     for vm in vms:
@@ -135,60 +181,24 @@ def main():
             line.append(vm[1])
             passed_vms.append(line)
 
-    if debug: print passed_vms
+    if debug: print(passed_vms)
 
     if do_mysql:
-        if not passed_vms == []:
-            records = 0
-            for item in DBC:
-                if item[0].lower() == 'db_address':  db_address =  item[1]
-                if item[0].lower() == 'db_port':     db_port =     int(item[1])
-                if item[0].lower() == 'db_user':     db_user =     item[1]
-                if item[0].lower() == 'db_password': db_password = item[1]
-                if item[0].lower() == 'db_base':     db_base =     item[1]
-
-            if debug: print db_address, db_port
-
-            db = MySQLdb.connect(host=db_address,port=db_port,user=db_user,passwd=db_password,db=db_base)
-            dbc = db.cursor()
-            insert_data = []
-            time_to_db = datetime.utcfromtimestamp(int(time.time())).strftime('%Y-%m-%d %H:%M:%S')
-
-            for vm in passed_vms:
-                for snapshot in sss:
-                    if vm[0] == snapshot[0]:
-                        records += 1
-                        line = (snapshot[1],
-                                snapshot[0],
-                                snapshot[2],
-                                datetime.utcfromtimestamp(int(snapshot[3])).strftime('%Y-%m-%d %H:%M:%S'),
-                                time_to_db
-                               )
-                        insert_data.append(line)
-
-            if debug: print insert_data
-
-            dbc.executemany("""INSERT INTO snapshots (sname, vmname, size, created, added)
-                               VALUES (%s, %s, %s, %s, %s)""",
-                            insert_data
-                           )
-            db.commit()
-            db.close()
-            print 'Inserted ' + str(records) +  ' record(s) into the database ' + db_base.upper()
-        else: print 'No records inserted into the database'
+        if passed_vms == []: print( 'No records inserted into the database' )
+        else: print( mysql_out(DBC,passed_vms,vms,sss ))
     else:
-        if passed_vms == []: print '\nNo machines have more than ' + str(snapshots) + \
-        ' snapshots and snapshot/size ratio >' + str(ratio) +'%.'
+        if passed_vms == []: print('\nNo machines have more than ' + str(snapshots) + \
+        ' snapshots and snapshot/size ratio >' + str(ratio) +'%.')
         else:
             for vm in passed_vms:
-                print '\nMachine ' + vm[0] + ' (total disk size ' + GetHumanReadable( int(vm[1])) + ') has snapshots'
+                print('\nMachine ' + vm[0] + ' (total disk size ' + GetHumanReadable( int(vm[1])) + ') has snapshots')
                 for snapshot in sss:
                     if vm[0] == snapshot[0]:
                         mark = ''
                         if 100 * int(snapshot[2]) > ratio * int(vm[1]): mark = '*'
-                        print snapshot[1], \
+                        print(snapshot[1], \
                         '\tCreated: ' + datetime.utcfromtimestamp(int(snapshot[3])).strftime('%d-%m-%Y %H:%M:%S') + ' UTC', \
-                        '\tSize: ' + GetHumanReadable( int(snapshot[2])) + mark
+                        '\tSize: ' + GetHumanReadable( int(snapshot[2])) + mark)
     return 0
 
 # Start program
