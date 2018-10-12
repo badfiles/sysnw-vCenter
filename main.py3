@@ -179,7 +179,7 @@ def main():
             if snapshot[0] == vm[0]: # count the total number of snapshots for each vm
                 snaps += 1
                 if 100 * int(snapshot[2]) > ratio * int(vm[1]): exceed = True # flag if any snap's size exceeds 'ratio'% of the vm size
-        if exceed == True and snaps >= snapshots: # if we have more or exactly snapshots than 'snapshots'
+        if exceed == True and snaps >= snapshots: # if there are more or exactly snapshots than 'snapshots' and the exceed flag is risen
             line.append(vm[0])
             line.append(vm[1])
             passed_vms.append(line) # put the vm info into the output array
