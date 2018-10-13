@@ -56,7 +56,7 @@ def random_snapshot(vm,size): # generates a random snapshot as an array [vm name
     ss.append('152' + ''.join(random.choice(string.digits) for _ in range(7)))  # random timestamp in unix format 152*******
     return ss
 
-def mysql_out(config,passed_vms,vms,snapshots): # performs mysql export with given config array and data to process
+def mysql_out(config,update_existing,passed_vms,vms,snapshots): # performs mysql export with given config array and data to process
     records = 0
     for item in config:
         if item[0].lower() == 'db_address':  db_address =  item[1];      continue
@@ -81,15 +81,17 @@ def mysql_out(config,passed_vms,vms,snapshots): # performs mysql export with giv
                     line = (snapshot[1],
                             snapshot[0],
                             snapshot[2],
-                            datetime.utcfromtimestamp(int(snapshot[3])).strftime('%Y-%m-%d %H:%M:%S'),
-                            time_to_db
+                            datetime.utcfromtimestamp(int(snapshot[3])).strftime('%Y-%m-%d %H:%M:%S')
                            )
                     insert_data.append(line)
 
         if debug: print(insert_data)
 
-        dbc.executemany("""INSERT INTO snapshots (sname, vmname, size, created, added)
-                           VALUES (%s, %s, %s, %s, %s)""",
+        action = 'sname=sname'
+        if update_existing: action = "added='" + time_to_db + "'"
+
+        dbc.executemany("INSERT INTO snapshots (sname, vmname, size, created, added) " + \
+                        "VALUES (%s, %s, %s, %s, '" + time_to_db + "') ON DUPLICATE KEY UPDATE " + action,
                         insert_data
                        )
         db.commit()
@@ -110,10 +112,11 @@ def main():
     sss=[] # this array will comtain all snapshots
 
     for item in GC: # parse glogal section
-        if item[0].lower() == 'snapshots':   snapshots =   int(item[1]);     continue
-        if item[0].lower() == 'ratio':       ratio =       int(item[1]);     continue
-        if item[0].lower() == 'debug':       debug =       to_bool(item[1]); continue
-        if item[0].lower() == 'random_data': random_data = to_bool(item[1]); continue
+        if item[0].lower() == 'snapshots':       snapshots =       int(item[1]);     continue
+        if item[0].lower() == 'ratio':           ratio =           int(item[1]);     continue
+        if item[0].lower() == 'debug':           debug =           to_bool(item[1]); continue
+        if item[0].lower() == 'random_data':     random_data =     to_bool(item[1]); continue
+        if item[0].lower() == 'update_existing': update_existing = to_bool(item[1]); continue
         if item[0].lower() == 'output' and item[1].lower() == 'mysql':
             DBC = read_config('mySql')
             do_mysql = True
@@ -179,7 +182,7 @@ def main():
             if snapshot[0] == vm[0]: # count the total number of snapshots for each vm
                 snaps += 1
                 if 100 * int(snapshot[2]) > ratio * int(vm[1]): exceed = True # flag if any snap's size exceeds 'ratio'% of the vm size
-        if exceed == True and snaps >= snapshots: # if there are more or exactly snapshots than 'snapshots' and the exceed flag is risen
+        if exceed and snaps >= snapshots: # if there are more or exactly snapshots than 'snapshots' and the exceed flag is risen
             line.append(vm[0])
             line.append(vm[1])
             passed_vms.append(line) # put the vm info into the output array
@@ -188,7 +191,7 @@ def main():
 
     if do_mysql: # based on config perform mysql export
         if passed_vms == []: print( 'No records inserted into the database' )
-        else: print( mysql_out(DBC,passed_vms,vms,sss ))
+        else: print( mysql_out(DBC,update_existing,passed_vms,vms,sss ))
     else: # or console output
         if passed_vms == []: print('\nNo machines have more than ' + str(snapshots) + \
         ' snapshots and snapshot/size ratio >' + str(ratio) +'%.')

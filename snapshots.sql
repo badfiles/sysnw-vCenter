@@ -46,6 +46,7 @@ CREATE TABLE `snapshots` (
 --
 ALTER TABLE `snapshots`
   ADD PRIMARY KEY (`id`);
+  ADD UNIQUE KEY `hash` (`sname`,`vmname`,`size`,`created`);
 
 --
 -- AUTO_INCREMENT for dumped tables
