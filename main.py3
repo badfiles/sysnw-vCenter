@@ -57,7 +57,6 @@ class Configuration:
         try:
             attr = ''
             options = set(self.props()).intersection(config.options(section))
-            print(options)
             for attr in options:
                 if isinstance(getattr(self,attr), bool): setattr(self, attr, config.getboolean(section,attr)); continue
                 if isinstance(getattr(self,attr), int):  setattr(self, attr, config.getint(section,attr));     continue
