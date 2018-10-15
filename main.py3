@@ -80,7 +80,6 @@ class Configuration:
 
         except (OSError, configparser.Error) as error:
             self.warnings.append( str(error) )
-            self.has_warning = True
 
 def random_vm(): # generates a random vm as an array [name, disksize]
     vm = []
