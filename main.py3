@@ -3,6 +3,7 @@
 import atexit
 #import argparse
 import sys
+import os
 import random
 import string
 import time
@@ -16,19 +17,6 @@ from datetime import datetime
 from pyVim import connect
 from pyVim.connect import Disconnect, SmartConnect, GetSi
 
-def to_bool(value): # turns yes/no or 1/0 to a corresponding boolean value. Also takes care of true/false in a wrong case.
-    valid = { 'true': True, '1': True, 'yes': True,
-              'false': False, '0': False, 'no': False }
-    if isinstance(value, bool):
-        return value
-    if not isinstance(value, str):
-        raise ValueError('invalid literal for boolean. Not a string.')
-    lower_value = value.lower()
-    if lower_value in valid:
-        return valid[lower_value]
-    else:
-        raise ValueError('invalid literal for boolean: "%s"' % value)
-
 def GetHumanReadable(size,precision=2): # takes a number of bytes and returns a human readable value (ex. 1024 --> 1KB )
     suffixes=['B','KB','MB','GB','TB']
     suffixIndex = 0
@@ -37,39 +25,90 @@ def GetHumanReadable(size,precision=2): # takes a number of bytes and returns a 
         size = size/1024.0
     return "%.*f%s"%(precision, size, suffixes[suffixIndex])
 
-def read_config(section): # returns the whole config section as a key-value array
-    config = configparser.RawConfigParser()
-    config.read('cred.conf')
-    return config.items(section)
+class Configuration:
+    def __init__(self, file_name):
+        self.snapshots: int = 2
+        self.ratio: int = 50
+        self.debug: bool = False
+        self.random_data: bool = True
+        self.update_existing: bool = False
+        self.output: str = 'console'
+
+        self.db_address: str = 'localhost'
+        self.db_port: int = 3306
+        self.db_user: str = 'user'
+        self.db_password: str = 'password'
+        self.db_base: str = 'base'
+
+        self.vC_address: str = 'localhost'
+        self.vC_port: int = 443
+        self.vC_user: str = 'user'
+        self.vC_password: str = 'password'
+        self.vC_ssl: bool = True
+
+        self.file_name = file_name
+        self.warnings = []
+        self.do_mysql = False
+
+    def props(self):
+        return [_ for _ in self.__dict__.keys() if _[:1] != '_']
+
+    def run_section(self,config,section):
+        try:
+            attr = ''
+            options = (set(self.props()).intersection(config.options(section)))
+            for attr in options:
+                if isinstance(getattr(self,attr), bool): setattr(self, attr, config.getboolean(section,attr)); continue
+                if isinstance(getattr(self,attr), str):  setattr(self, attr, config.get(section,attr));        continue
+                if isinstance(getattr(self,attr), int):  setattr(self, attr, config.getint(section,attr))
+
+        except (configparser.Error, ValueError) as error:
+            if attr == '': self.warnings.append( str(error) )
+            else: self.warnings.append( "option '" + attr + "' has a wrong value: " + str(error) )
+
+    def populate(self):
+        try:
+            config = configparser.ConfigParser()
+            config_path =  os.path.join( os.path.abspath( os.path.dirname( __file__ ) ), self.file_name)
+            if not os.path.isfile(config_path): raise OSError("file '" + config_path + "' does not exist")
+            config.read(config_path)
+            self.run_section(config,'general')
+            if not self.random_data: self.run_section(config,'vCenter')
+            if self.output.lower() == 'mysql':
+                self.run_section(config,'mySql')
+                self.do_mysql = True
+
+        except (OSError, configparser.Error) as error:
+            self.warnings.append( str(error) )
+            self.has_warning = True
 
 def random_vm(): # generates a random vm as an array [name, disksize]
-    vm=[]
+    vm = []
     vm.append(''.join(random.choice(string.ascii_lowercase) for _ in range(5))) # 5 random letters
     vm.append(random.randint( 0, 5000000000) )
     return vm
 
 def random_snapshot(vm,size): # generates a random snapshot as an array [vm name, name, size, timestamp]
-    ss=[]
+    ss = []
     ss.append(vm)
     ss.append(''.join(random.choice(string.ascii_lowercase) for _ in range(3))) # 3 random letters
     ss.append(random.randint( 0, int(size)))                                    # the size of a snapshot should not exceed the size of the vm
     ss.append('152' + ''.join(random.choice(string.digits) for _ in range(7)))  # random timestamp in unix format 152*******
     return ss
 
-def mysql_out(config,update_existing,passed_vms,vms,snapshots): # performs mysql export with given config array and data to process
+def mysql_out(config,passed_vms,vms,snapshots): # performs mysql export with given config array and data to process
     records = 0
-    for item in config:
-        if item[0].lower() == 'db_address':  db_address =  item[1];      continue
-        if item[0].lower() == 'db_port':     db_port =     int(item[1]); continue
-        if item[0].lower() == 'db_user':     db_user =     item[1];      continue
-        if item[0].lower() == 'db_password': db_password = item[1];      continue
-        if item[0].lower() == 'db_base':     db_base =     item[1]
 
-    if debug: print(db_address, db_port)
+    if config.debug: print(config.db_address, config.db_port)
 
     try:
         db = None
-        db = MySQLdb.connect(host=db_address,port=db_port,user=db_user,passwd=db_password,db=db_base)
+        db = MySQLdb.connect(host=config.db_address,
+                             port=config.db_port,
+                             user=config.db_user,
+                             passwd=config.db_password,
+                             db=config.db_base
+                            )
         dbc = db.cursor()
         insert_data = []
         time_to_db = datetime.utcfromtimestamp(int(time.time())).strftime('%Y-%m-%d %H:%M:%S')
@@ -85,17 +124,17 @@ def mysql_out(config,update_existing,passed_vms,vms,snapshots): # performs mysql
                            )
                     insert_data.append(line)
 
-        if debug: print(insert_data)
+        if config.debug: print(insert_data)
 
         action = 'sname=sname'
-        if update_existing: action = "added='" + time_to_db + "'"
+        if config.update_existing: action = "added='" + time_to_db + "'"
 
         dbc.executemany("INSERT INTO snapshots (sname, vmname, size, created, added) " + \
                         "VALUES (%s, %s, %s, %s, '" + time_to_db + "') ON DUPLICATE KEY UPDATE " + action,
                         insert_data
                        )
         db.commit()
-        result = 'Inserted ' + str(records) +  ' record(s) into the database ' + db_base.upper()
+        result = 'Inserted ' + str(records) + ' record(s) into the database ' + db_base.upper()
 
     except MySQLdb.Error as error:
         result = error
@@ -105,45 +144,33 @@ def mysql_out(config,update_existing,passed_vms,vms,snapshots): # performs mysql
     return result
 
 def main():
-    global debug
-    GC = read_config('general') # get 'general' section of the config
-    do_mysql = False
-    vms=[] # this array will contain all vms
-    sss=[] # this array will comtain all snapshots
+    config = Configuration('cred.conf')
+    config.populate()
+    if not config.warnings == []:
+        print('There have been configuration file errors:')
+        for item in config.warnings:
+            print (item)
 
-    for item in GC: # parse glogal section
-        if item[0].lower() == 'snapshots':       snapshots =       int(item[1]);     continue
-        if item[0].lower() == 'ratio':           ratio =           int(item[1]);     continue
-        if item[0].lower() == 'debug':           debug =           to_bool(item[1]); continue
-        if item[0].lower() == 'random_data':     random_data =     to_bool(item[1]); continue
-        if item[0].lower() == 'update_existing': update_existing = to_bool(item[1]); continue
-        if item[0].lower() == 'output' and item[1].lower() == 'mysql':
-            DBC = read_config('mySql')
-            do_mysql = True
+    vms = [] # this array will contain all vms
+    snapshots = [] # this array will comtain all snapshots
 
-    if not random_data: # trying to connect to vCenter
-        VC = read_config('vCenter') # get 'vCenter' section of the config
+    if not config.random_data: # trying to connect to vCenter
 
-        for item in VC: # parse vCenter section
-            if item[0].lower() == 'vc_address':  vC_address =  item[1];          continue
-            if item[0].lower() == 'vc_port':     vC_port =     int(item[1]);     continue
-            if item[0].lower() == 'vc_user':     vC_user =     item[1];          continue
-            if item[0].lower() == 'vc_password': vC_password = item[1];          continue
-            if item[0].lower() == 'vc_ssl':      vC_ssl =      to_bool(item[1])
-
-        if debug: print(vC_address, vC_port, vC_ssl, ratio, snapshots, runtime)
+        if config.debug: print(config.vC_address, config.vC_port, config.vC_ssl, config.ratio, config.snapshots)
 
         try:
-            if not vC_ssl:
-                service_instance = connect.SmartConnectNoSSL(host=vC_address,
-                                                             user=vC_user,
-                                                             pwd=vC_password,
-                                                             port=vC_port)
+            if not config.vC_ssl:
+                service_instance = connect.SmartConnectNoSSL(host=config.vC_address,
+                                                             user=config.vC_user,
+                                                             pwd=config.vC_password,
+                                                             port=config.vC_port
+                                                            )
             else:
-                service_instance = connect.SmartConnect(host=vC_address,
-                                                            user=vC_user,
-                                                            pwd=vC_password,
-                                                            port=vC_port)
+                service_instance = connect.SmartConnect(host=config.vC_address,
+                                                        user=config.vC_user,
+                                                        pwd=config.vC_password,
+                                                        port=config.vC_port
+                                                       )
 
             atexit.register(connect.Disconnect, service_instance)
 
@@ -152,10 +179,9 @@ def main():
             container = content.rootFolder
             viewType = [vim.VirtualMachine]
             recursive = True
-            containerView = content.viewManager.CreateContainerView(
-                            container, viewType, recursive)
+            containerView = content.viewManager.CreateContainerView(container, viewType, recursive)
             children = containerView.view
-            for child in children: pass # parse output to arrays vms and sss if possible here
+            for child in children: pass # parse output to arrays vms and snapshots if possible here
 
         except vmodl.MethodFault as error:
             print("Caught vmodl fault : " + error.msg)
@@ -167,44 +193,47 @@ def main():
             vms.append(random_vm())
         for item in vms:
             for _ in range(random.randint(0, make_max_snapshots)):
-                sss.append(random_snapshot(item[0],item[1]))
+                snapshots.append(random_snapshot(item[0],item[1]))
 
-    if debug:
+    if config.debug:
         print(vms)
-        print(sss)
+        print(snapshots)
 
     passed_vms=[] # this array will contain the vms which satisfy the conditions
     for vm in vms: # go through all vms
         snaps = 0
-        line=[]
+        line = []
         exceed = False
-        for snapshot in sss: # go through all snapshots
+        for snapshot in snapshots: # go through all snapshots
             if snapshot[0] == vm[0]: # count the total number of snapshots for each vm
                 snaps += 1
-                if 100 * int(snapshot[2]) > ratio * int(vm[1]): exceed = True # flag if any snap's size exceeds 'ratio'% of the vm size
-        if exceed and snaps >= snapshots: # if there are more or exactly snapshots than 'snapshots' and the exceed flag is risen
+                if 100 * int(snapshot[2]) > config.ratio * int(vm[1]): exceed = True # flag if any snap's size exceeds 'ratio'% of the vm size
+        if exceed and snaps >= config.snapshots: # if there are more or exactly snapshots than 'snapshots' and the exceed flag is risen
             line.append(vm[0])
             line.append(vm[1])
             passed_vms.append(line) # put the vm info into the output array
 
-    if debug: print(passed_vms)
+    if config.debug: print(passed_vms)
 
-    if do_mysql: # based on config perform mysql export
+    if config.do_mysql: # based on config perform mysql export
         if passed_vms == []: print( 'No records inserted into the database' )
-        else: print( mysql_out(DBC,update_existing,passed_vms,vms,sss ))
+        else: print( mysql_out(config,passed_vms,vms,sss ))
     else: # or console output
-        if passed_vms == []: print('\nNo machines have more than ' + str(snapshots) + \
-        ' snapshots and snapshot/size ratio >' + str(ratio) +'%.')
+        if passed_vms == []: print('\nNo machines have more than ' + str(config.snapshots) + \
+                                   ' snapshots and snapshot/size ratio >' + str(config.ratio) +'%.'
+                                  )
         else:
             for vm in passed_vms:
                 print('\nMachine ' + vm[0] + ' (total disk size ' + GetHumanReadable( int(vm[1])) + ') has snapshots')
-                for snapshot in sss:
+                for snapshot in snapshots:
                     if vm[0] == snapshot[0]:
                         mark = ''
-                        if 100 * int(snapshot[2]) > ratio * int(vm[1]): mark = '*'
+                        if 100 * int(snapshot[2]) > config.ratio * int(vm[1]): mark = '*'
                         print(snapshot[1], \
-                        '\tCreated: ' + datetime.utcfromtimestamp(int(snapshot[3])).strftime('%d-%m-%Y %H:%M:%S') + ' UTC', \
-                        '\tSize: ' + GetHumanReadable( int(snapshot[2])) + mark)
+                              '\tCreated: ' + datetime.utcfromtimestamp(int(snapshot[3])).strftime('%d-%m-%Y %H:%M:%S') + ' UTC', \
+                              '\tSize: ' + GetHumanReadable( int(snapshot[2])) + mark \
+                             )
+
     return 0
 
 # Start program
