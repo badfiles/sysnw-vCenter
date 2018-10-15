@@ -25,8 +25,8 @@ def GetHumanReadable(size,precision=2): # takes a number of bytes and returns a 
         size = size/1024.0
     return "%.*f%s"%(precision, size, suffixes[suffixIndex])
 
-class Configuration:
-    def __init__(self, file_name):
+class Configuration: # Class to hold the configuration and process a config file
+    def __init__(self, file_name): # set default values
         self.snapshots: int = 2
         self.ratio: int = 50
         self.debug: bool = False
@@ -51,10 +51,10 @@ class Configuration:
         self.warnings = []
         self.do_mysql = False
 
-    def props(self):
+    def props(self): # get all class attributes except system ones
         return [_ for _ in self.__dict__.keys() if _[:1] != '_']
 
-    def run_section(self,config,section):
+    def run_section(self,config,section): # reads the given section of a config file
         try:
             attr = ''
             options = set(self.props()).intersection(config.options(section))
@@ -63,11 +63,11 @@ class Configuration:
                 if isinstance(getattr(self,attr), int):  setattr(self, attr, config.getint(section,attr));     continue
                 setattr(self, attr, config.get(section,attr))
 
-        except (configparser.Error, ValueError) as error:
+        except (configparser.Error, ValueError) as error: # treat all errors as warnings as there are default values
             if attr == '': self.warnings.append( str(error) )
             else: self.warnings.append( "option '" + attr + "' has a wrong value: " + str(error) )
 
-    def populate(self):
+    def populate(self): # process the file in 'file_name'
         try:
             config = configparser.ConfigParser()
             config_path =  os.path.join( os.path.abspath( os.path.dirname( __file__ ) ), self.file_name)
@@ -79,7 +79,7 @@ class Configuration:
                 self.run_section(config,'mySql')
                 self.do_mysql = True
 
-        except (OSError, configparser.Error) as error:
+        except (OSError, configparser.Error) as error: # treat all errors as warnings as there are default values
             self.warnings.append( str(error) )
 
 def random_vm(): # generates a random vm as an array [name, disksize]
@@ -96,7 +96,7 @@ def random_snapshot(vm,size): # generates a random snapshot as an array [vm name
     ss.append('152' + ''.join(random.choice(string.digits) for _ in range(7)))  # random timestamp in unix format 152*******
     return ss
 
-def mysql_out(config,passed_vms,vms,snapshots): # performs mysql export with given config array and data to process
+def mysql_out(config,passed_vms,vms,snapshots): # performs mysql export with given config and data to process
     records = 0
 
     if config.debug: print(config.db_address, config.db_port)
@@ -145,14 +145,14 @@ def mysql_out(config,passed_vms,vms,snapshots): # performs mysql export with giv
     return result
 
 def main():
-    config = Configuration('cred.conf')
-    config.populate()
-    if not config.warnings == []:
+    config = Configuration('cred.conf') # create the configuration object and point to the config file
+    config.populate() # transfer options from the config file to the object
+    if not config.warnings == []: # if there are warnings print them all out
         print('There have been configuration file errors:')
         for item in config.warnings:
             print (item)
 
-    vms = [] # this array will contain all vms
+    vms = []       # this array will contain all vms
     snapshots = [] # this array will comtain all snapshots
 
     if not config.random_data: # trying to connect to vCenter
