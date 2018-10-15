@@ -56,7 +56,7 @@ class Configuration:
     def run_section(self,config,section):
         try:
             attr = ''
-            options = (set(self.props()).intersection(config.options(section)))
+            options = set(self.props()).intersection(config.options(section))
             for attr in options:
                 if isinstance(getattr(self,attr), bool): setattr(self, attr, config.getboolean(section,attr)); continue
                 if isinstance(getattr(self,attr), str):  setattr(self, attr, config.get(section,attr));        continue
@@ -216,7 +216,7 @@ def main():
 
     if config.do_mysql: # based on config perform mysql export
         if passed_vms == []: print( 'No records inserted into the database' )
-        else: print( mysql_out(config,passed_vms,vms,sss ))
+        else: print( mysql_out(config,passed_vms,vms,snapshots))
     else: # or console output
         if passed_vms == []: print('\nNo machines have more than ' + str(config.snapshots) + \
                                    ' snapshots and snapshot/size ratio >' + str(config.ratio) +'%.'
