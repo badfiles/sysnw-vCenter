@@ -36,6 +36,7 @@ class Configuration:
 
         self.db_address: str = 'localhost'
         self.db_port: int = 3306
+        self.db_timeout: int = 2
         self.db_user: str = 'user'
         self.db_password: str = 'password'
         self.db_base: str = 'base'
@@ -107,7 +108,7 @@ def mysql_out(config,passed_vms,vms,snapshots): # performs mysql export with giv
                              user=config.db_user,
                              passwd=config.db_password,
                              db=config.db_base,
-                             connect_timeout=2
+                             connect_timeout=config.db_timeout
                             )
         dbc = db.cursor()
         insert_data = []
