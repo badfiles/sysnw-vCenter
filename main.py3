@@ -135,7 +135,7 @@ def mysql_out(config,passed_vms,vms,snapshots): # performs mysql export with giv
                         insert_data
                        )
         db.commit()
-        result = 'Inserted ' + str(records) + ' record(s) into the database ' + db_base.upper()
+        result = 'Inserted ' + str(records) + ' record(s) into the database ' + config.db_base.upper()
 
     except MySQLdb.Error as error:
         result = error
