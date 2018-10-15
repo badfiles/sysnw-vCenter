@@ -57,10 +57,11 @@ class Configuration:
         try:
             attr = ''
             options = set(self.props()).intersection(config.options(section))
+            print(options)
             for attr in options:
                 if isinstance(getattr(self,attr), bool): setattr(self, attr, config.getboolean(section,attr)); continue
-                if isinstance(getattr(self,attr), str):  setattr(self, attr, config.get(section,attr));        continue
-                if isinstance(getattr(self,attr), int):  setattr(self, attr, config.getint(section,attr))
+                if isinstance(getattr(self,attr), int):  setattr(self, attr, config.getint(section,attr));     continue
+                setattr(self, attr, config.get(section,attr))
 
         except (configparser.Error, ValueError) as error:
             if attr == '': self.warnings.append( str(error) )
@@ -106,7 +107,8 @@ def mysql_out(config,passed_vms,vms,snapshots): # performs mysql export with giv
                              port=config.db_port,
                              user=config.db_user,
                              passwd=config.db_password,
-                             db=config.db_base
+                             db=config.db_base,
+                             connect_timeout=2
                             )
         dbc = db.cursor()
         insert_data = []
