@@ -50,29 +50,29 @@ class Configuration: # Class to hold the configuration and process a config file
         self.file_name = file_name
         self.warnings = []
         self.__excluded_options = []
-        self.__options = set()
         self.do_mysql = False
 
     def props(self): # get all class attributes except system ones
         return [_ for _ in self.__dict__.keys() if _[:1] != '_']
 
-    def __run_section(self,config,section): # reads the given section of a config file, returns inverse result to run in a while loop
-        try:
-            attr = ''
-            if self.__options == set(): self.__options = set(self.props()).intersection(config.options(section))
-            for attr in self.__options:
-                if attr in self.__excluded_options: continue
-                self.__excluded_options.append(attr)
-                if isinstance(getattr(self,attr), bool): setattr(self, attr, config.getboolean(section,attr)); continue
-                if isinstance(getattr(self,attr), int):  setattr(self, attr, config.getint(section,attr));     continue
-                setattr(self, attr, config.get(section,attr))
-            self.__excluded_options = []
-            self.__options = set()
-            return False
+    def __run_section(self,config,section): # reads the given section of a config file
+        all_done = False
+        attr = ''
+        options = set(self.props()).intersection(config.options(section))
+        while not all_done: # to catch all erroneous and acceptable options in a section should be run multiple times
+            try:
+                for attr in options:
+                    if attr in self.__excluded_options: continue
+                    self.__excluded_options.append(attr)
+                    if isinstance(getattr(self,attr), bool): setattr(self, attr, config.getboolean(section,attr)); continue
+                    if isinstance(getattr(self,attr), int):  setattr(self, attr, config.getint(section,attr));     continue
+                    setattr(self, attr, config.get(section,attr))
+                self.__excluded_options = []
+                all_done = True
 
-        except (configparser.Error, ValueError) as error: # treat all errors as warnings as there are default values
-            if attr == '': self.warnings.append( str(error) ); return False
-            else: self.warnings.append( "option '" + attr + "' has a wrong value: " + str(error) ); return True
+            except (configparser.Error, ValueError) as error: # treat all errors as warnings as there are default values
+                if attr == '': self.warnings.append( str(error) ); all_done = True
+                else: self.warnings.append( "option '" + attr + "' has a wrong value: " + str(error) )
 
     def populate(self): # process the file in 'file_name'
         try:
@@ -80,11 +80,10 @@ class Configuration: # Class to hold the configuration and process a config file
             config_path =  os.path.join( os.path.abspath( os.path.dirname( __file__ ) ), self.file_name)
             if not os.path.isfile(config_path): raise OSError("file '" + config_path + "' does not exist")
             config.read(config_path)
-            while self.__run_section(config,'general'): pass # to catch all erroneous and acceptable options in a section should be run multiple times
-            if not self.random_data:
-                while self.__run_section(config,'vCenter'): pass
+            self.__run_section(config,'general')
+            if not self.random_data: self.__run_section(config,'vCenter')
             if self.output.lower() == 'mysql':
-                while self.__run_section(config,'mySql'): pass
+                self.__run_section(config,'mySql')
                 self.do_mysql = True
 
         except (OSError, configparser.Error) as error: # treat all errors as warnings as there are default values
