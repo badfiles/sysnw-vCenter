@@ -49,23 +49,30 @@ class Configuration: # Class to hold the configuration and process a config file
 
         self.file_name = file_name
         self.warnings = []
+        self.__excluded_options = []
+        self.__options = set()
         self.do_mysql = False
 
     def props(self): # get all class attributes except system ones
         return [_ for _ in self.__dict__.keys() if _[:1] != '_']
 
-    def run_section(self,config,section): # reads the given section of a config file
+    def __run_section(self,config,section): # reads the given section of a config file, returns inverse result to run in a while loop
         try:
             attr = ''
-            options = set(self.props()).intersection(config.options(section))
-            for attr in options:
+            if self.__options == set(): self.__options = set(self.props()).intersection(config.options(section))
+            for attr in self.__options:
+                if attr in self.__excluded_options: continue
+                self.__excluded_options.append(attr)
                 if isinstance(getattr(self,attr), bool): setattr(self, attr, config.getboolean(section,attr)); continue
                 if isinstance(getattr(self,attr), int):  setattr(self, attr, config.getint(section,attr));     continue
                 setattr(self, attr, config.get(section,attr))
+            self.__excluded_options = []
+            self.__options = set()
+            return False
 
         except (configparser.Error, ValueError) as error: # treat all errors as warnings as there are default values
-            if attr == '': self.warnings.append( str(error) )
-            else: self.warnings.append( "option '" + attr + "' has a wrong value: " + str(error) )
+            if attr == '': self.warnings.append( str(error) ); return False
+            else: self.warnings.append( "option '" + attr + "' has a wrong value: " + str(error) ); return True
 
     def populate(self): # process the file in 'file_name'
         try:
@@ -73,14 +80,21 @@ class Configuration: # Class to hold the configuration and process a config file
             config_path =  os.path.join( os.path.abspath( os.path.dirname( __file__ ) ), self.file_name)
             if not os.path.isfile(config_path): raise OSError("file '" + config_path + "' does not exist")
             config.read(config_path)
-            self.run_section(config,'general')
-            if not self.random_data: self.run_section(config,'vCenter')
+            while self.__run_section(config,'general'): pass # to catch all erroneous and acceptable options in a section should be run multiple times
+            if not self.random_data:
+                while self.__run_section(config,'vCenter'): pass
             if self.output.lower() == 'mysql':
-                self.run_section(config,'mySql')
+                while self.__run_section(config,'mySql'): pass
                 self.do_mysql = True
 
         except (OSError, configparser.Error) as error: # treat all errors as warnings as there are default values
             self.warnings.append( str(error) )
+
+    def warn(self): # prints warnings if any
+        if not self.warnings == []:
+            print('There have been configuration file errors:')
+            for item in self.warnings:
+                print (item)
 
 def random_vm(): # generates a random vm as an array [name, disksize]
     vm = []
@@ -147,13 +161,10 @@ def mysql_out(config,passed_vms,vms,snapshots): # performs mysql export with giv
 def main():
     config = Configuration('cred.conf') # create the configuration object and point to the config file
     config.populate() # transfer options from the config file to the object
-    if not config.warnings == []: # if there are warnings print them all out
-        print('There have been configuration file errors:')
-        for item in config.warnings:
-            print (item)
+    config.warn() # if there are warnings print them all out
 
     vms = []       # this array will contain all vms
-    snapshots = [] # this array will comtain all snapshots
+    snapshots = [] # this array will contain all snapshots
 
     if not config.random_data: # trying to connect to vCenter
 
