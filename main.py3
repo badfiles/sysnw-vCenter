@@ -116,7 +116,6 @@ def main():
     if config.debug: print(config)
 
     snapshots = []
-    passed_vms = []
 
     if config.random_data: #generate random test data
         make_vms = 10
@@ -132,18 +131,18 @@ def main():
 
     totals = f'{totals} total Vms: {Vm.count}; Snapshots: {Snapshot.count}'
 
-    cpus = mp.cpu_count()
+    cpus = len(os.sched_getaffinity(0))
     if cpus > 1: #process vms on all available cpu cores (only makes sense if 'snapshots' is huge or unsorted, this code is a poc)
-        stripes = len(vms)//cpus
+        stripe_size = len(vms)//cpus
         passed_vms = mp.Manager().list() # use process manager to store common output array
         procs = []
-        for proc in range(cpus): # split index field of vms (0,len(vms)-1)) into 'cpus' stripes
-            end = (proc+1)*stripes-1
-            if proc == cpus-1: end += len(vms)%cpus # adding the remaining indexes to the last stripe
+        for proc_num in range(cpus): # split index field of vms (0,len(vms)-1)) into 'cpus' stripes
+            end = (proc_num + 1)*stripe_size - 1
+            if proc_num == cpus-1: end += len(vms)%cpus # adding the remaining indexes to the last stripe
             if end >= 0: # if there are more cores than vms do not invoke empty stripes (ex. 4 cores and 3 vms will produce stripes (0,-1) (0,0) (1,1) (2,2), so only invoke the last three
-                procs.append(mp.Process(target=vms_split, args=(config, vms, (proc*stripes, end), snapshots, passed_vms)))
+                procs.append(mp.Process(target=vms_split, args=(config, vms, (proc_num*stripe_size, end), snapshots, passed_vms)))
                 procs[-1].start() # start processing a stripe
-        for p in procs: p.join() # wait for all stripes to finish
+        for proc in procs: proc.join() # wait for all stripes to finish
         procs.clear()
     else: # process vms on a single cpu
         passed_vms = []
