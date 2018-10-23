@@ -3,113 +3,53 @@
 import atexit
 #import argparse
 import sys
-import os
-import random
-import string
 import time
 import ssl
-import configparser
 import MySQLdb
+import multiprocessing as mp
 
 from pyVmomi import vim, vmodl
 from datetime import datetime
 #from pyVim.task import WaitForTask
 from pyVim import connect
 from pyVim.connect import Disconnect, SmartConnect, GetSi
+from classes import *
 
-def GetHumanReadable(size,precision=2): # takes a number of bytes and returns a human readable value (ex. 1024 --> 1KB )
-    suffixes=['B','KB','MB','GB','TB']
-    suffixIndex = 0
-    while size > 1024 and suffixIndex < 4:
-        suffixIndex += 1
-        size = size/1024.0
-    return "%.*f%s"%(precision, size, suffixes[suffixIndex])
+def vC_connect(config):
+    "performs connection to vCenter"
+    try:
+        if not config.vC_ssl:
+            service_instance = connect.SmartConnectNoSSL(host=config.vC_address,
+                                                         user=config.vC_user,
+                                                         pwd=config.vC_password,
+                                                         port=config.vC_port
+                                                        )
+        else:
+            service_instance = connect.SmartConnect(host=config.vC_address,
+                                                    user=config.vC_user,
+                                                    pwd=config.vC_password,
+                                                    port=config.vC_port
+                                                   )
 
-class Configuration: # Class to hold the configuration and process a config file
-    def __init__(self, file_name): # set default values
-        self.snapshots: int = 2
-        self.ratio: int = 50
-        self.debug: bool = False
-        self.random_data: bool = True
-        self.update_existing: bool = False
-        self.output: str = 'console'
+        atexit.register(connect.Disconnect, service_instance)
 
-        self.db_address: str = 'localhost'
-        self.db_port: int = 3306
-        self.db_timeout: int = 2
-        self.db_user: str = 'user'
-        self.db_password: str = 'password'
-        self.db_base: str = 'base'
+        content = service_instance.RetrieveContent()
 
-        self.vC_address: str = 'localhost'
-        self.vC_port: int = 443
-        self.vC_user: str = 'user'
-        self.vC_password: str = 'password'
-        self.vC_ssl: bool = True
+        container = content.rootFolder
+        viewType = [vim.VirtualMachine]
+        recursive = True
+        containerView = content.viewManager.CreateContainerView(container, viewType, recursive)
+        children = containerView.view
+        for child in children: pass # parse output to vms and snapshots if possible here
+        return [], []
 
-        self.file_name = file_name
-        self.warnings = []
-        self.__excluded_options = []
-        self.do_mysql = False
+    except vmodl.MethodFault as error:
+        print("Caught vmodl fault : " + error.msg)
+        return [], []
 
-    def props(self): # get all class attributes except system ones
-        return [_ for _ in self.__dict__.keys() if _[:1] != '_']
+def mysql_out(config, passed_vms):
+    "performs mysql export with given config and data to process"
 
-    def __run_section(self,config,section): # reads the given section of a config file
-        all_done = False
-        attr = ''
-        options = set(self.props()).intersection(config.options(section))
-        while not all_done: # to catch all erroneous and acceptable options in a section should be run multiple times
-            try:
-                for attr in options:
-                    if attr in self.__excluded_options: continue
-                    self.__excluded_options.append(attr)
-                    if isinstance(getattr(self,attr), bool): setattr(self, attr, config.getboolean(section,attr)); continue
-                    if isinstance(getattr(self,attr), int):  setattr(self, attr, config.getint(section,attr));     continue
-                    setattr(self, attr, config.get(section,attr))
-                self.__excluded_options = []
-                all_done = True
-
-            except (configparser.Error, ValueError) as error: # treat all errors as warnings as there are default values
-                if attr == '': self.warnings.append( str(error) ); all_done = True
-                else: self.warnings.append( "option '" + attr + "' has a wrong value: " + str(error) )
-
-    def populate(self): # process the file in 'file_name'
-        try:
-            config = configparser.ConfigParser()
-            config_path =  os.path.join( os.path.abspath( os.path.dirname( __file__ ) ), self.file_name)
-            if not os.path.isfile(config_path): raise OSError("file '" + config_path + "' does not exist")
-            config.read(config_path)
-            self.__run_section(config,'general')
-            if not self.random_data: self.__run_section(config,'vCenter')
-            if self.output.lower() == 'mysql':
-                self.__run_section(config,'mySql')
-                self.do_mysql = True
-
-        except (OSError, configparser.Error) as error: # treat all errors as warnings as there are default values
-            self.warnings.append( str(error) )
-
-    def warn(self): # prints warnings if any
-        if not self.warnings == []:
-            print('There have been configuration file errors:')
-            for item in self.warnings:
-                print (item)
-
-def random_vm(): # generates a random vm as an array [name, disksize]
-    vm = []
-    vm.append(''.join(random.choice(string.ascii_lowercase) for _ in range(5))) # 5 random letters
-    vm.append(random.randint( 0, 5000000000) )
-    return vm
-
-def random_snapshot(vm,size): # generates a random snapshot as an array [vm name, name, size, timestamp]
-    ss = []
-    ss.append(vm)
-    ss.append(''.join(random.choice(string.ascii_lowercase) for _ in range(3))) # 3 random letters
-    ss.append(random.randint( 0, int(size)))                                    # the size of a snapshot should not exceed the size of the vm
-    ss.append('152' + ''.join(random.choice(string.digits) for _ in range(7)))  # random timestamp in unix format 152*******
-    return ss
-
-def mysql_out(config,passed_vms,vms,snapshots): # performs mysql export with given config and data to process
     records = 0
 
     if config.debug: print(config.db_address, config.db_port)
@@ -128,15 +68,14 @@ def mysql_out(config,passed_vms,vms,snapshots): # performs mysql export with giv
         time_to_db = datetime.utcfromtimestamp(int(time.time())).strftime('%Y-%m-%d %H:%M:%S')
 
         for vm in passed_vms:
-            for snapshot in snapshots:
-                if vm[0] == snapshot[0]:
-                    records += 1
-                    line = (snapshot[1],
-                            snapshot[0],
-                            snapshot[2],
-                            datetime.utcfromtimestamp(int(snapshot[3])).strftime('%Y-%m-%d %H:%M:%S')
-                           )
-                    insert_data.append(line)
+            for snapshot in vm.snapshots:
+                records += 1
+                line = (snapshot.sn_name,
+                        snapshot.vm_name,
+                        snapshot.size,
+                        snapshot.sql_timestamp
+                       )
+                insert_data.append(line)
 
         if config.debug: print(insert_data)
 
@@ -148,102 +87,93 @@ def mysql_out(config,passed_vms,vms,snapshots): # performs mysql export with giv
                         insert_data
                        )
         db.commit()
-        result = 'Inserted ' + str(records) + ' record(s) into the database ' + config.db_base.upper()
+        result = f'Inserted {records} record(s) into the database {config.db_base.upper()}'
 
     except MySQLdb.Error as error:
         result = error
     finally:
         if db != None: db.close()
-
     return result
 
+def vms_split(config, vms, stripe, snapshots, target):
+    "iterates over vms from index=stripe[0] to stripe[1]"
+    for idx,vm in enumerate(vms):
+        if idx < stripe[0]: continue #FIXME find a better solution to exclude the beginning of an array
+        if idx > stripe[1]: break
+        key = vm.vm_name
+        for snap in snapshots:
+            if snap.vm_name == key:
+                vm.snapshots.append(snap) #puts all snapshots to corresponding Vms
+        if vm.num_snapshots >= config.snapshots and 100*vm.max_snapshot > config.ratio*vm.size:
+            target.append(vm) # sorts out the Vms that satisfy the conditions
+
 def main():
+    start = time.time()
     config = Configuration('cred.conf') # create the configuration object and point to the config file
     config.populate() # transfer options from the config file to the object
     config.warn() # if there are warnings print them all out
 
-    vms = []       # this array will contain all vms
-    snapshots = [] # this array will contain all snapshots
+    if config.debug: print(config)
 
-    if not config.random_data: # trying to connect to vCenter
+    snapshots = []
+    passed_vms = []
 
-        if config.debug: print(config.vC_address, config.vC_port, config.vC_ssl, config.ratio, config.snapshots)
-
-        try:
-            if not config.vC_ssl:
-                service_instance = connect.SmartConnectNoSSL(host=config.vC_address,
-                                                             user=config.vC_user,
-                                                             pwd=config.vC_password,
-                                                             port=config.vC_port
-                                                            )
-            else:
-                service_instance = connect.SmartConnect(host=config.vC_address,
-                                                        user=config.vC_user,
-                                                        pwd=config.vC_password,
-                                                        port=config.vC_port
-                                                       )
-
-            atexit.register(connect.Disconnect, service_instance)
-
-            content = service_instance.RetrieveContent()
-
-            container = content.rootFolder
-            viewType = [vim.VirtualMachine]
-            recursive = True
-            containerView = content.viewManager.CreateContainerView(container, viewType, recursive)
-            children = containerView.view
-            for child in children: pass # parse output to arrays vms and snapshots if possible here
-
-        except vmodl.MethodFault as error:
-            print("Caught vmodl fault : " + error.msg)
-            return -1
-    else: # generate random data
-        make_vms = 50
+    if config.random_data: #generate random test data
+        make_vms = 10
         make_max_snapshots = 5
-        for _ in range( make_vms ):
-            vms.append(random_vm())
-        for item in vms:
+        vms = [ Vm.random() for _ in range(make_vms) ]
+        for vm in vms:
             for _ in range(random.randint(0, make_max_snapshots)):
-                snapshots.append(random_snapshot(item[0],item[1]))
+                snapshots.append(Snapshot.random(vm))
+        totals = 'Genegated'
+    else: #aquire data from vCenter
+        vms, snapshots = vC_connect(config)
+        totals = 'Got'
 
-    if config.debug:
-        print(vms)
-        print(snapshots)
+    totals = f'{totals} total Vms: {Vm.count}; Snapshots: {Snapshot.count}'
 
-    passed_vms=[] # this array will contain the vms which satisfy the conditions
-    for vm in vms: # go through all vms
-        snaps = 0
-        line = []
-        exceed = False
-        for snapshot in snapshots: # go through all snapshots
-            if snapshot[0] == vm[0]: # count the total number of snapshots for each vm
-                snaps += 1
-                if 100 * int(snapshot[2]) > config.ratio * int(vm[1]): exceed = True # flag if any snap's size exceeds 'ratio'% of the vm size
-        if exceed and snaps >= config.snapshots: # if there are more or exactly snapshots than 'snapshots' and the exceed flag is risen
-            line.append(vm[0])
-            line.append(vm[1])
-            passed_vms.append(line) # put the vm info into the output array
+    cpus = mp.cpu_count()
+    if cpus > 1: #process vms on all available cpu cores (only makes sense if 'snapshots' is huge or unsorted, this code is a poc)
+        stripes = len(vms)//cpus
+        passed_vms = mp.Manager().list() # use process manager to store common output array
+        procs = []
+        for proc in range(cpus): # split index field of vms (0,len(vms)-1)) into 'cpus' stripes
+            end = (proc+1)*stripes-1
+            if proc == cpus-1: end += len(vms)%cpus # adding the remaining indexes to the last stripe
+            if end >= 0: # if there are more cores than vms do not invoke empty stripes (ex. 4 cores and 3 vms will produce stripes (0,-1) (0,0) (1,1) (2,2), so only invoke the last three
+                procs.append(mp.Process(target=vms_split, args=(config, vms, (proc*stripes, end), snapshots, passed_vms)))
+                procs[-1].start() # start processing a stripe
+        for p in procs: p.join() # wait for all stripes to finish
+        procs.clear()
+    else: # process vms on a single cpu
+        passed_vms = []
+        vms_split(config, vms, (0, len(vms)), snapshots, passed_vms)
 
-    if config.debug: print(passed_vms)
+    found_vms = len(passed_vms)
 
     if config.do_mysql: # based on config perform mysql export
-        if passed_vms == []: print( 'No records inserted into the database' )
-        else: print( mysql_out(config,passed_vms,vms,snapshots))
-    else: # or console output
-        if passed_vms == []: print('\nNo machines have more than ' + str(config.snapshots) + \
-                                   ' snapshots and snapshot/size ratio >' + str(config.ratio) +'%.'
-                                  )
+        if found_vms == 0:
+            print('No records inserted into the database')
         else:
-            for vm in passed_vms:
-                print('\nMachine ' + vm[0] + ' (total disk size ' + GetHumanReadable( int(vm[1])) + ') has snapshots')
-                for snapshot in snapshots:
-                    if vm[0] == snapshot[0]:
-                        mark = ''
-                        if 100 * int(snapshot[2]) > config.ratio * int(vm[1]): mark = '*'
-                        print(snapshot[1], \
-                              '\tCreated: ' + datetime.utcfromtimestamp(int(snapshot[3])).strftime('%d-%m-%Y %H:%M:%S') + ' UTC', \
-                              '\tSize: ' + GetHumanReadable( int(snapshot[2])) + mark \
-                             )
+            print(mysql_out(config,passed_vms))
+
+    if config.debug or not config.do_mysql:
+        sep = "="*80
+        seb = "-"*80
+        print(sep)
+        print(totals)
+        print(sep)
+        print(f'Vms found: {found_vms}')
+        print(seb)
+        print('None') if found_vms == 0 else print( *passed_vms, sep='\n')
+        if config.debug:
+            stats = [ (vm.vm_name, vm.num_snapshots, int(100*vm.max_snapshot/vm.size)) for vm in vms ]
+            print(sep)
+            print(f'Vm stats (name, snapshots, max.snap/size ratio):')
+            print(seb)
+            print( *stats,  sep='\n')
+        print(sep)
+        print(f'Execution time, sec: {time.time() - start}')
 
     return 0
 
